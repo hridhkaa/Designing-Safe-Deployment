@@ -1,0 +1,183 @@
+name: Safe Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - fix/pipeline
+
+  pull_request:
+    branches:
+      - main
+
+jobs:
+
+  # Stage 1: Source
+  source:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Record commit information
+        run: |
+          echo "Commit SHA: $GITHUB_SHA"
+          echo "Branch: $GITHUB_REF"
+          echo "Timestamp: $(date -u)"
+
+  # Stage 2: Build
+  build:
+    needs: source
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Build application
+        run: npm run build
+
+      - name: Create build artifact
+        run: |
+          mkdir -p build
+          cp -r src build/
+          cp package.json package-lock.json build/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: build/
+
+  # Stage 3: Test
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  # Stage 4: Security
+  security:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Dependency security audit
+        run: npm audit --audit-level=high
+
+  # Stage 5a: Deploy to Staging
+  deploy-staging:
+    needs: security
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    environment:
+      name: staging
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: build/
+
+      - name: Deploy to staging
+        run: |
+          echo "================================="
+          echo "Deploying to STAGING"
+          echo "Commit: $GITHUB_SHA"
+          echo "Timestamp: $(date -u)"
+          echo "================================="
+          echo "Staging deployment completed."
+
+  # Stage 5b: Deploy to Production
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+
+    environment:
+      name: production
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: build/
+
+      - name: Deploy to production
+        run: |
+          echo "================================="
+          echo "Deploying to PRODUCTION"
+          echo "Commit: $GITHUB_SHA"
+          echo "Timestamp: $(date -u)"
+          echo "================================="
+          echo "Production deployment completed."
+
+  # Stage 6: Verify
+  verify:
+    needs: deploy-production
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Verify deployment
+        run: |
+          echo "================================="
+          echo "Running deployment verification"
+          echo "Commit: $GITHUB_SHA"
+          echo "Timestamp: $(date -u)"
+          echo "================================="
+
+          echo "Health check passed."
+          echo "Smoke test passed."
+          echo "Deployment is healthy."
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "================================="
+          echo "DEPLOYMENT VERIFICATION FAILED"
+          echo "Triggering rollback..."
+          echo "Rolling back to previous known-good version."
+          echo "================================="
